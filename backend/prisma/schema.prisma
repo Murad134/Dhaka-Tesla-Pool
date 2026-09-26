@@ -1,0 +1,165 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  PASSENGER
+  DRIVER
+}
+
+enum RideStatus {
+  REQUESTED
+  MATCHED
+  DRIVER_ARRIVED
+  STARTED
+  COMPLETED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  TESLAPAY
+}
+
+enum PaymentStatus {
+  UNPAID
+  PAID
+  REFUNDED
+}
+
+model User {
+  id           String        @id @default(uuid())
+  name         String
+  email        String        @unique
+  passwordHash String
+  role         Role
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  driver       Driver?
+  rides        Ride[]        @relation("PassengerRides")
+  rideHistory  RideHistory[]
+}
+
+model Driver {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  isOnline  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user  User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tesla Tesla?
+  rides Ride[]  @relation("DriverRides")
+}
+
+model Tesla {
+  id        String   @id @default(uuid())
+  name      String
+  capacity  Int
+  driverId  String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  driver Driver @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  rides  Ride[]
+  pools  Pool[]
+}
+
+model Zone {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  latitude  Decimal  @db.Decimal(9, 6)
+  longitude Decimal  @db.Decimal(9, 6)
+  createdAt DateTime @default(now())
+
+  pickupRides       Ride[] @relation("PickupZone")
+  destinationRides  Ride[] @relation("DestinationZone")
+}
+
+model Pool {
+  id         String   @id @default(uuid())
+  teslaId    String
+  status     RideStatus @default(MATCHED)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tesla    Tesla          @relation(fields: [teslaId], references: [id], onDelete: Restrict)
+  rides    Ride[]
+  members  PoolMembership[]
+
+  @@index([teslaId, status])
+}
+
+model Ride {
+  id               String        @id @default(uuid())
+  passengerId      String
+  driverId         String?
+  teslaId          String?
+  poolId           String?
+  pickupZoneId     String
+  destinationZoneId String
+  seatsRequested   Int           @default(1)
+  distanceKm       Decimal       @db.Decimal(6, 2)
+  farePoysha       Int
+  poolDiscountPoysha Int         @default(0)
+  paymentMethod    PaymentMethod @default(CASH)
+  paymentStatus    PaymentStatus @default(UNPAID)
+  status           RideStatus    @default(REQUESTED)
+  requestedAt      DateTime      @default(now())
+  matchedAt        DateTime?
+  driverArrivedAt  DateTime?
+  startedAt        DateTime?
+  completedAt      DateTime?
+  cancelledAt      DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  passenger    User       @relation("PassengerRides", fields: [passengerId], references: [id], onDelete: Restrict)
+  driver       Driver?    @relation("DriverRides", fields: [driverId], references: [id], onDelete: Restrict)
+  tesla        Tesla?     @relation(fields: [teslaId], references: [id], onDelete: Restrict)
+  pool         Pool?      @relation(fields: [poolId], references: [id], onDelete: SetNull)
+  pickupZone   Zone       @relation("PickupZone", fields: [pickupZoneId], references: [id], onDelete: Restrict)
+  destinationZone Zone     @relation("DestinationZone", fields: [destinationZoneId], references: [id], onDelete: Restrict)
+  history      RideHistory[]
+  membership   PoolMembership?
+
+  @@index([passengerId, createdAt])
+  @@index([driverId, status, createdAt])
+  @@index([status, pickupZoneId, destinationZoneId])
+  @@index([poolId, status])
+}
+
+model PoolMembership {
+  id        String   @id @default(uuid())
+  poolId    String
+  rideId    String   @unique
+  seats     Int      @default(1)
+  joinedAt  DateTime @default(now())
+
+  pool Pool @relation(fields: [poolId], references: [id], onDelete: Cascade)
+  ride Ride @relation(fields: [rideId], references: [id], onDelete: Cascade)
+
+  @@unique([poolId, rideId])
+  @@index([poolId])
+}
+
+model RideHistory {
+  id        String     @id @default(uuid())
+  rideId    String
+  actorId   String?
+  fromStatus RideStatus?
+  toStatus RideStatus
+  note      String?
+  createdAt DateTime   @default(now())
+
+  ride  Ride @relation(fields: [rideId], references: [id], onDelete: Cascade)
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([rideId, createdAt])
+}
