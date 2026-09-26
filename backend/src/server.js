@@ -6,6 +6,7 @@ const morgan = require("morgan");
 const env = require("./config/env");
 const prisma = require("./config/db");
 const authRoutes = require("./routes/authRoutes");
+const rideRoutes = require("./routes/rideRoutes");
 const errorHandler = require("./middlewares/errorHandler");
 
 const app = express();
@@ -54,7 +55,7 @@ app.get("/health", async (req, res) => {
 
 // Authentication routes
 app.use("/api/auth", authRoutes);
-
+app.use("/api/rides", rideRoutes);
 // 404 handler
 app.use((req, res) => { res.status(404).json({ error: "Route not found", }); });
 
