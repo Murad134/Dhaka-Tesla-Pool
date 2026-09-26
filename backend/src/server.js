@@ -7,6 +7,7 @@ const env = require("./config/env");
 const prisma = require("./config/db");
 const authRoutes = require("./routes/authRoutes");
 const rideRoutes = require("./routes/rideRoutes");
+const poolRoutes = require("./routes/poolRoutes");
 const errorHandler = require("./middlewares/errorHandler");
 
 const app = express();
@@ -56,6 +57,7 @@ app.get("/health", async (req, res) => {
 // Authentication routes
 app.use("/api/auth", authRoutes);
 app.use("/api/rides", rideRoutes);
+app.use("/api/pools", poolRoutes);
 // 404 handler
 app.use((req, res) => { res.status(404).json({ error: "Route not found", }); });
 
