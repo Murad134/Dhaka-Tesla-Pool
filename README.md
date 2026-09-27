@@ -1,170 +1,619 @@
-# Dhaka Tesla Pool — Full Stack MVP
+# Dhaka Tesla Pool
 
-## Summary & Problem Statement
+Dhaka Tesla Pool is a full-stack ride-pooling MVP for sharing fixed-capacity Tesla rides between compatible Dhaka zones. It supports passenger ride requests, driver matching, pool capacity protection, fare calculation, JWT authentication, and ride lifecycle tracking.
 
-**Dhaka Tesla Pool** is a ride-sharing MVP designed to solve the chaotic commute in Dhaka by letting passengers share a fixed-capacity Tesla to compatible destinations. The primary problem is matching riders (like Nusrat and Rafiq) efficiently without exceeding the 3-seat capacity of vehicles (like Jashim's Bullet), calculating fair split fares, and managing the ride lifecycle while avoiding race conditions during bookings.
+## Live Deployment
 
-## Features Implemented
-- **Passenger Flow**: Sign up/in, request a ride with specific seats, view estimated/pooled fare, track status, and view history.
-- **Driver Flow**: Sign up/in, toggle online status, accept rides, advance ride states, and see pool capacity.
-- **Pooling Logic**: Automatically match compatible requests (e.g., Banani → Mohakhali and Banani → Gulshan 1) into a single pool without exceeding vehicle capacity.
-- **Fare Model**: Base fare + distance charge - pool discount.
+- Frontend: https://frontend-dhaka-tesla-pool.vercel.app
+- Backend: https://backend-dhaka-tesla-pool.vercel.app
+- Health check: https://backend-dhaka-tesla-pool.vercel.app/health
 
-*(Screenshots and GIFs will be added in the release documentation)*
+The frontend and backend are deployed as separate Vercel projects. PostgreSQL is hosted separately and is accessed by Prisma from the backend function.
 
-## Architecture Diagram
+## Zones & Matching Rule
+
+The predefined zones are:
+
+- Banani
+- Gulshan 1
+- Gulshan 2
+- Mohakhali
+- Dhanmondi
+- Mirpur
+- Uttara
+- Farmgate
+- Bashundhara
+
+Two rides can be pooled when they have the same pickup zone and compatible destination corridors. Different pickup zones can also match only when both routes are registered compatible corridors and the destinations overlap, meet at a pickup zone, or otherwise satisfy the corridor rule in `backend/src/utils/zones.js`. This is route-corridor matching, not live map-based routing.
+
+## Features
+
+- Passenger registration and login
+- Driver registration and login
+- Driver online/offline status
+- Ride requests with seat counts and payment method
+- Fare calculation in poysha with pool discounts
+- Route compatibility matching across predefined Dhaka zones
+- Tesla and pool capacity enforcement
+- Ride status transitions:
+  `REQUESTED -> MATCHED -> DRIVER_ARRIVED -> STARTED -> COMPLETED`
+- Ride cancellation and ride history
+- Serializable Prisma transactions for concurrent matching
+- API health endpoint with database connectivity status
+
+## Architecture
 
 ```mermaid
-flowchart TD
-    Client[Browser / Next.js SSR] -->|REST API| API[Node.js / Express API]
-    API -->|Prisma ORM| DB[(PostgreSQL)]
-    
-    sublayer[Business Logic]
-    API -.-> Matcher[Pool Matcher]
-    API -.-> State[State Machine]
-    API -.-> Fare[Fare Calculator]
+flowchart LR
+    Browser[Next.js Browser] -->|REST + JWT| API[Express API]
+    API --> Prisma[Prisma ORM]
+    Prisma --> DB[(PostgreSQL)]
+    API --> Match[Pool Matcher]
+    API --> Fare[Fare Calculator]
+    API --> State[Ride State Machine]
 ```
 
-## Entity Relationship Diagram (ERD)
+## Database Design / ERD
+
+The full ERD is also maintained in [docs/erd.md](docs/erd.md). The diagram below is derived from the Prisma schema in `backend/prisma/schema.prisma`.
 
 ```mermaid
 erDiagram
-    USER ||--o{ DRIVER : "has"
-    USER ||--o{ RIDE : "books"
-    DRIVER ||--o| TESLA : "drives"
-    TESLA ||--o{ POOL : "hosts"
-    POOL ||--o{ POOL_MEMBERSHIP : "contains"
-    RIDE ||--o| POOL_MEMBERSHIP : "belongs to"
-    RIDE }o--|| ZONE : "pickup/destination"
-    RIDE ||--o{ RIDE_HISTORY : "tracks"
+    USER ||--o| DRIVER : has
+    USER ||--o{ RIDE : requests
+    USER ||--o{ RIDE_HISTORY : acts_on
+    DRIVER ||--o| TESLA : drives
+    DRIVER ||--o{ RIDE : accepts
+    TESLA ||--o{ RIDE : fulfills
+    TESLA ||--o{ POOL : hosts
+    ZONE ||--o{ RIDE : pickup_zone
+    ZONE ||--o{ RIDE : destination_zone
+    POOL ||--o{ RIDE : groups
+    POOL ||--o{ POOL_MEMBERSHIP : contains
+    RIDE ||--o| POOL_MEMBERSHIP : has
+    RIDE ||--o{ RIDE_HISTORY : records
+
+    USER {
+      string id PK
+      string email UK
+      Role role
+    }
+    DRIVER {
+      string id PK
+      string userId FK UK
+      boolean isOnline
+    }
+    TESLA {
+      string id PK
+      string driverId FK UK
+      int capacity
+    }
+    ZONE {
+      string id PK
+      string name UK
+      decimal latitude
+      decimal longitude
+    }
+    POOL {
+      string id PK
+      string teslaId FK
+      RideStatus status
+    }
+    RIDE {
+      string id PK
+      string passengerId FK
+      string driverId FK
+      string teslaId FK
+      string poolId FK
+      string pickupZoneId FK
+      string destinationZoneId FK
+      int seatsRequested
+      int farePoysha
+      RideStatus status
+    }
+    POOL_MEMBERSHIP {
+      string id PK
+      string poolId FK
+      string rideId FK UK
+      int seats
+    }
+    RIDE_HISTORY {
+      string id PK
+      string rideId FK
+      string actorId FK
+      RideStatus fromStatus
+      RideStatus toStatus
+    }
 ```
 
-## Tech Stack & Justification
+`User` stores identity and role information. A driver has one linked `Driver` record and one linked `Tesla`. A `Ride` belongs to a passenger, may be assigned to a driver and Tesla, and may join a `Pool` through one `PoolMembership` record. `Zone` is referenced twice by each ride for pickup and destination. `RideHistory` stores status transitions and the user who performed them. Capacity is represented by Tesla capacity and membership seat counts, while fare values are stored as integer poysha.
 
-- **Frontend**: Next.js (App Router), React. *Why*: Provides excellent SSR, simple routing, and built-in API integration capabilities for a fast MVP.
-- **Backend**: Node.js + Express. *Why*: Lightweight, easy to set up, and unopinionated, allowing explicit control over transaction boundaries and state machine logic without the overhead of NestJS.
-- **Database**: PostgreSQL. *Why*: Relational data is crucial for this domain (users, rides, pools). Postgres handles `Serializable` transactions natively, which is vital for preventing overbooking (the concurrency problem).
-- **ORM**: Prisma. *Why*: Type-safe database access and easy migrations.
-- **Auth**: JWT. *Why*: Stateless, standard, and easy to deploy in an MVP.
+### Applications
 
-## Project Structure
-- `/backend`: Express API, Prisma schema, tests, and business logic.
-- `/frontend`: Next.js application, React components, and context.
-- `docker-compose.yml`: Container orchestration.
+| Application | Directory | Local URL | Production |
+| --- | --- | --- | --- |
+| Frontend | `frontend/` | `http://localhost:3001` | Vercel |
+| Backend | `backend/` | `http://localhost:4000` | Vercel serverless function |
+| PostgreSQL | Docker service | `localhost:5432` | Hosted PostgreSQL |
+
+### Project Structure
+
+```text
+backend/
+  api/index.js             Vercel serverless entry point
+  prisma/                  Schema, migrations, and seed data
+  src/server.js            Express application
+  src/controllers/         Request handlers
+  src/middlewares/         Auth, ownership, and error handling
+  src/routes/              API route registration
+  src/utils/               Fare, matching, zones, and state logic
+  src/tests/               Jest and Supertest tests
+  vercel.json              Vercel route rewrites for Express paths
+
+frontend/
+  src/app/                 Next.js App Router pages
+  src/components/          Shared UI components
+  src/context/             Authentication context
+  src/lib/api.js           API client and JWT header handling
+  public/images/            Static image assets
+
+docker-compose.yml         Local PostgreSQL, backend, and frontend services
+```
+
+## Technology
+
+- Next.js 15.5.26 and React 19
+- Node.js 20+
+- Express 5
+- PostgreSQL 16
+- Prisma 6
+- JWT authentication
+- Docker Compose
+- Vercel
+
+## Technology Decisions
+
+| Technology | Why it fits this MVP | Realistic alternative | When to change it |
+| --- | --- | --- | --- |
+| Next.js | Provides the App Router, page routing, and production builds for the passenger and driver UI. | Remix or Vite with React | Change if the frontend needs a different rendering model or a separate SPA architecture. |
+| React | Supports reusable dashboards, forms, status views, and authentication UI. | Vue or Svelte | Change if the team standardizes on another component ecosystem. |
+| Node.js | Keeps the frontend tooling and backend language consistent and works well for REST I/O. | Go or Java | Change for different runtime performance, operational, or team requirements. |
+| Express | Keeps the REST API small and explicit while allowing existing middleware and route patterns. | Fastify or NestJS | Change when validation, modules, or throughput requirements justify a larger framework. |
+| PostgreSQL | Provides relational integrity and serializable transactions for ride and seat-capacity data. | MySQL or a managed relational database | Change only if workload, geography, or operational requirements require another datastore. |
+| Prisma | Gives the Node.js API a typed schema, migrations, and transaction support. | Drizzle or node-postgres | Change if query control, bundle size, or ORM capability becomes a constraint. |
+| JWT | Provides stateless authentication suitable for this MVP and its separate frontend/backend deployment. | Server sessions or an identity provider | Change when token revocation, SSO, MFA, or centralized identity becomes essential. |
+| Docker Compose | Reproduces PostgreSQL, backend, and frontend locally with health checks and persistent data. | Dev Containers or Kubernetes | Change when local orchestration or production service management needs a different platform. |
+| Vercel | Deploys the Next.js frontend and the Express API entry point with Git-based builds. | Render, Railway, Fly.io, or a VPS | Change when long-running workers, WebSockets, or container control are required. |
+| Supabase PostgreSQL | Provides a hosted PostgreSQL database suitable for Prisma and the deployed API. | Neon, Railway PostgreSQL, or managed AWS RDS | Change for different region, pooling, compliance, backup, or scaling requirements. |
+
+These choices keep the MVP relational, easy to run locally, and simple to deploy while preserving a path toward managed infrastructure as usage grows.
+
+## Git Workflow
+
+The project Git workflow uses feature-based development and the following promotion path:
+
+```text
+feature/* -> master -> pre-release -> release/v1.0.0
+```
+
+The commit history shows incremental work across database design, authentication, rides, pooling, drivers, tests, UI, Docker, environment configuration, and deployment.
+
+## Commit History / Engineering Journey
+
+The following list records the provided commit subjects in chronological project order:
+
+1. `chore: initialize project structure with essential configuration files`
+2. `feat: add initial database schema and migration files for user, ride, and pooling management`
+3. `feat(auth): implement JWT authentication and user roles`
+4. `feat(rides): implement ride requests, fare calculation, and zones`
+5. `feat(pool): implement pooling matching and capacity enforcement`
+6. `feat(driver): implement driver flow and ride lifecycle`
+7. `test: add comprehensive tests for pool capacity, concurrency, ownership, fare, and ride state transitions`
+8. `chore: remove frontend subproject`
+9. `feat(ui): implement passenger driver and authentication flows`
+10. `build(docker): add Docker Compose setup with migrations, seed, and health checks`
+11. `chore(env): configure Supabase PostgreSQL and JWT environment variables`
+12. `feat: update backend and frontend configurations for Vercel deployment`
+
+The Docker work added backend and frontend Dockerfiles, `.dockerignore` files, a PostgreSQL service, a persistent PostgreSQL volume, environment configuration, Prisma migrations and seed execution, and service health checks.
+
+The final Vercel configuration work added the backend `vercel-build` script for Prisma generation, the Vercel API entry point, `vercel.json` route rewrites, CORS updates, frontend ESLint/FlatCompat updates, the Next.js Image migration, `useCallback` refactoring, backend test import fixes, and the `.vercel` gitignore update.
 
 ## Prerequisites
-- Docker and Docker Compose
-- Node.js 20+ (if running locally without Docker)
+
+- Node.js 20 or newer
+- npm
+- Docker Desktop with Docker Compose
+- A hosted PostgreSQL database for production
+- Vercel CLI for command-line deployment
 
 ## Environment Variables
 
-An example `.env.example` is provided in both `frontend` and `backend` directories. Never commit real secrets.
-```env
-# Backend (.env)
-DATABASE_URL=postgresql://postgres:postgres@postgres:5432/dhaka_tesla_pool?schema=public
-JWT_SECRET=your_secret_key_here
-PORT=4000
-CORS_ORIGIN=http://localhost:3000
+Never commit `.env`, `.env.local`, database credentials, or JWT secrets. Use the example files as templates.
 
-# Frontend (.env.local)
+### Root `.env`
+
+Used by Docker Compose for local PostgreSQL and service configuration:
+
+```env
+POSTGRES_DB=dhaka_tesla_pool
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=use-a-local-password
+JWT_SECRET=replace-with-a-random-secret-at-least-32-characters
+JWT_EXPIRES_IN=1d
+NODE_ENV=development
+CORS_ORIGIN=http://localhost:3000,http://localhost:3001
 NEXT_PUBLIC_API_URL=http://localhost:4000/api
 ```
 
-## Local Setup & Docker Instructions
+Docker maps the frontend to port `3001`, so both `3000` and `3001` are allowed for local CORS. The actual frontend used by Docker is `http://localhost:3001`.
 
-1. **Clone & Env setup**:
-   ```bash
-   cp frontend/.env.example frontend/.env.local
-   cp backend/.env.example backend/.env
-   cp .env.example .env
-   ```
+### Backend `.env`
 
-2. **Run via Docker**:
-   ```bash
-   docker compose up --build
-   ```
-   The backend container automatically runs Prisma migrations (`prisma migrate deploy`) and seeds the database (`prisma db seed`).
+Used when running the backend directly without Docker:
 
-## Running Locally (Without Docker)
+```env
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/dhaka_tesla_pool?schema=public
+JWT_SECRET=replace-with-a-random-secret-at-least-32-characters
+JWT_EXPIRES_IN=1d
+NODE_ENV=development
+PORT=4000
+CORS_ORIGIN=http://localhost:3000,http://localhost:3001
+```
 
-**Backend**:
+When using Docker Compose, the database host is `postgres`, not `localhost`; Compose supplies that connection automatically.
+
+### Frontend `.env.local`
+
+```env
+NEXT_PUBLIC_API_URL=http://localhost:4000/api
+```
+
+`NEXT_PUBLIC_API_URL` is embedded into the Next.js build. Set it in Vercel before deploying, not only after the deployment finishes.
+
+## Run Locally With Docker
+
+From the repository root:
+
+```bash
+docker compose up --build -d
+```
+
+Open:
+
+- Frontend: http://localhost:3001
+- Backend root: http://localhost:4000
+- Backend health: http://localhost:4000/health
+
+Check service status:
+
+```bash
+docker compose ps
+```
+
+View logs:
+
+```bash
+docker compose logs -f backend
+docker compose logs -f frontend
+```
+
+Stop the services:
+
+```bash
+docker compose down
+```
+
+The backend container runs Prisma migrations and seed data during startup. PostgreSQL data is stored in the `postgres_data` Docker volume.
+
+## Run Without Docker
+
+Start PostgreSQL separately, then run the backend:
+
 ```bash
 cd backend
 npm install
+npx prisma generate
 npx prisma migrate dev
 npm run prisma:seed
 npm run dev
 ```
 
-**Frontend**:
+In another terminal, run the frontend:
+
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-**Testing (Backend)**:
+For a production-like frontend run:
+
+```bash
+cd frontend
+npm run build
+npm run start
+```
+
+## Database Operations
+
+Create and apply a development migration:
+
+```bash
+cd backend
+npx prisma migrate dev --name describe-your-change
+```
+
+Apply committed migrations to a hosted production database:
+
+```bash
+cd backend
+npx prisma migrate deploy
+```
+
+Generate the Prisma client:
+
+```bash
+cd backend
+npx prisma generate
+```
+
+For hosted providers such as Supabase, use the provider's Prisma-compatible connection string. If a pooler connection is unsuitable for migrations, use the provider's direct database connection for the migration command and keep the pooler URL for runtime traffic.
+
+## Tests and Quality Checks
+
+Run backend tests:
+
 ```bash
 cd backend
 npm test
 ```
 
-## Demo Credentials
+Run backend lint:
 
-Password for all users: `Password123!`
-- Driver: `jashim@example.com` (Drives "Bullet", Capacity 3)
-- Passengers: `nusrat@example.com`, `rafiq@example.com`, `shirin@example.com`
+```bash
+cd backend
+npm run lint
+```
+
+Run frontend lint and build:
+
+```bash
+cd frontend
+npm run lint
+npm run build
+```
+
+The test suite covers fare calculation, route matching, pool capacity, ownership, state transitions, and concurrent matching behavior.
+
+## Vercel Deployment
+
+Deploy frontend and backend as two separate Vercel projects from the same GitHub repository.
+
+### Frontend project
+
+Vercel settings:
+
+```text
+Project root directory: frontend
+Framework preset: Next.js
+Build command: npm run build
+Install command: npm install
+```
+
+Production environment variable:
+
+```env
+NEXT_PUBLIC_API_URL=https://backend-dhaka-tesla-pool.vercel.app/api
+```
+
+### Backend project
+
+Vercel settings:
+
+```text
+Project root directory: backend
+```
+
+The backend uses `api/index.js` as the serverless entry point. `vercel.json` rewrites `/health`, `/api/*`, and other backend paths to that Express function. Do not deploy the Dockerfile or Docker Compose database to Vercel.
+
+Production environment variables:
+
+```env
+DATABASE_URL=your-hosted-postgresql-connection-string
+JWT_SECRET=your-random-secret-at-least-32-characters
+JWT_EXPIRES_IN=1d
+NODE_ENV=production
+CORS_ORIGIN=https://frontend-dhaka-tesla-pool.vercel.app
+```
+
+Run production migrations against the hosted database before testing user flows:
+
+```bash
+cd backend
+npx prisma migrate deploy
+```
+
+### Vercel CLI workflow
+
+The root-directory setting means deployment should be launched from the repository root after the project is linked:
+
+```bash
+vercel link
+vercel --prod
+```
+
+If Vercel reports `frontend/frontend` or `backend/backend`, the command was launched from the child directory while the Vercel project already has that child directory configured as its root. Run the command from the repository root instead.
+
+### Deployment verification
+
+Check the backend:
+
+```text
+GET https://backend-dhaka-tesla-pool.vercel.app/health
+```
+
+Expected response:
+
+```json
+{"status":"ok","database":"ok"}
+```
+
+When testing from the frontend origin, the backend preflight response must include:
+
+```text
+Access-Control-Allow-Origin: https://frontend-dhaka-tesla-pool.vercel.app
+```
 
 ## API Overview
 
-- `POST /api/auth/login`: Authenticate and receive JWT.
-- `POST /api/rides`: Request a new ride.
-- `POST /api/rides/:id/match`: (Driver) Match an existing ride into a new or existing pool.
-- `PATCH /api/rides/:id/status`: (Driver) Advance ride status.
-- `GET /api/rides/history`: (Passenger) View history.
+All application routes are prefixed with `/api`.
 
-## Key Decisions, Trade-offs & Limitations
+### Authentication
 
-- **Concurrency Handling**: To prevent overbooking when two users (e.g. Nusrat and Shirin) try to claim the last seat simultaneously, we use a `Serializable` database transaction during the matching process. If both transactions read the same available seat count, the second one to commit will fail and throw a serialization error. This ensures Bullet's capacity is mathematically impossible to exceed.
-- **Trade-off**: Serializable transactions are safe but slow at high concurrency and can cause retries. At scale, this would be a bottleneck.
-- **Geography**: We use hardcoded predefined zones (Banani, Gulshan 1, etc.) instead of a mapping API to keep the focus on state and pooling logic.
-- **Limitation**: The matching logic is currently very basic (matching strictly compatible hardcoded routes).
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+
+### Passenger and ride routes
+
+- `POST /api/rides`
+- `GET /api/rides/:id`
+- `PATCH /api/rides/:id/status`
+- `GET /api/rides/history`
+
+### Driver routes
+
+- `GET /api/drivers/me`
+- `GET /api/drivers/requests`
+- `GET /api/drivers/history`
+- `PATCH /api/drivers/online`
+
+### Pool routes
+
+- `POST /api/rides/:id/match`
+- `GET /api/pools/:id`
+
+Protected routes require:
+
+```http
+Authorization: Bearer <jwt-token>
+```
+
+## Demo Data
+
+The seed script creates demo users and zones. Demo password:
+
+```text
+Password123!
+```
+
+Demo accounts:
+
+- Driver: `jashim@example.com`
+- Passenger: `nusrat@example.com`
+- Passenger: `rafiq@example.com`
+- Passenger: `shirin@example.com`
+
+Do not use these credentials in a real production system.
+
+## Known Limitations & Next Improvements
+
+- **Corridor-based matching**: Matching uses predefined zone corridors rather than live distance, traffic, or map routing. A future version could use a routing provider or PostGIS.
+- **No real-time tracking**: Ride status is refreshed through REST requests and does not include live vehicle location tracking. WebSockets or server-sent events could support this later.
+- **Single-region deployment**: The current Vercel and hosted PostgreSQL deployment is intended for a single-region MVP. Multi-region services and read replicas may be needed for broader coverage.
+- **Simulated payment only**: Payment methods and statuses are modeled in the database, but no real payment gateway is integrated. A production release would need a provider, webhook handling, and reconciliation.
+
+## Troubleshooting
+
+### CORS error in the browser
+
+Confirm that:
+
+1. `CORS_ORIGIN` exactly matches the frontend origin, including `https://` and without a trailing slash.
+2. `NEXT_PUBLIC_API_URL` ends with `/api`.
+3. The backend has been redeployed after changing its environment variables.
+4. The backend `vercel.json` rewrite is deployed.
+5. The preflight response contains `Access-Control-Allow-Origin`.
+
+Do not enter environment values through a shell pipeline that adds line endings. A value such as `production\r\n` fails backend validation. Vercel's dashboard environment editor or a newline-free value file should be used.
+
+### `FUNCTION_INVOCATION_FAILED`
+
+Check the Vercel runtime logs and verify that `DATABASE_URL`, `JWT_SECRET`, `NODE_ENV`, and `CORS_ORIGIN` exist in the Production environment. The Docker hostname `postgres` is valid only inside Docker Compose and cannot be used by Vercel.
+
+### Vercel cannot find the project
+
+Deploy each project from its configured root directory or from the repository root with the project linked. Do not configure the repository root as both the working directory and the project root.
+
+### Database is unavailable
+
+Check the hosted database connection string, SSL requirements, connection pool limits, and whether the database allows connections from the deployment provider. Then run `npx prisma migrate deploy` against that same database.
+
+## Fare Model
+
+The fare calculator uses the following formula:
+
+```text
+passengerFare = baseFare + (distanceKm * perKmRate) - poolDiscount
+```
+
+Current implementation constants:
+
+- `baseFare = 5,000` poysha (BDT 50)
+- `perKmRate = 3,000` poysha per kilometre (BDT 30/km)
+- `poolDiscount = 20% of the gross fare` when the ride is pooled
+
+Worked examples:
+
+| Passenger | Route | Distance | Gross fare | Pool discount | Passenger fare |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Nusrat | Banani -> Mohakhali | 4 km | `5,000 + (4 * 3,000) = 17,000` | `20% of 17,000 = 3,400` | `13,600` poysha (BDT 136) |
+| Rafiq | Banani -> Gulshan 1 | 5 km | `5,000 + (5 * 3,000) = 20,000` | `20% of 20,000 = 4,000` | `16,000` poysha (BDT 160) |
+
+Without pooling, the discount is zero, so the same fares would be `17,000` and `20,000` poysha. The implementation rounds distance charges and discounts to whole poysha and stores fare values as integers.
+
+## Design and Domain Decisions
+
+- Predefined zones keep the MVP independent of an external maps provider.
+- PostgreSQL provides relational integrity for users, rides, pools, and history.
+- Serializable transactions prevent two concurrent matches from exceeding Tesla capacity.
+- JWT keeps authentication stateless for the MVP.
+- The current matching algorithm is intentionally limited to compatible predefined corridors.
+
+## Scaling Roadmap
+
+At much higher traffic, the current serializable matching transaction may become a contention point. Possible future improvements include:
+
+1. Redis-based seat reservations with atomic operations.
+2. A queue and dedicated matching worker.
+3. Read replicas for ride history and status queries.
+4. PostGIS for geographic matching.
+5. WebSockets or server-sent events for real-time ride status.
+6. Horizontal API scaling behind an API gateway.
+
+## Security and Contributions
+
+Keep secrets out of Git, never use demo credentials in production, add tests for behavior changes, and run the backend test suite plus frontend lint and build before opening a pull request.
 
 ## AI Usage
 
-- **Tools Used**: Gemini 3.1 Pro (High)
-- **What For**: To review and refactor the codebase to align exactly with the strict PRD, implement robust testing, and generate the Git history.
-- **Accepted Suggestion**: Using `Serializable` isolation level in Prisma `$transaction` specifically for the `matchRide` controller to prevent the classic race condition when two passengers book the last seat.
-- **Rejected/Changed Suggestion**: AI initially suggested using Redis for locking seats. I rejected this because introducing Redis violates the architectural constraint to "add complexity only when there is a reason". Postgres `Serializable` transactions are perfectly sufficient for the MVP scale.
+### AI Tool: Google Antigravity
 
-## Video Demo & Deployment
+Google Antigravity was used as an AI engineering and development tool for:
 
-- **Demo Video**: [Link to Loom Video](#) *(Placeholder)*
-- **Deployment URL**: [Link to Vercel/Render](#) *(Placeholder)*
+- implementation assistance
+- debugging
+- configuration and deployment assistance
+- code improvement and refactoring
+- testing assistance
+- documentation and README assistance
 
-### Vercel Deployment
+The developer reviewed and tested the resulting work and remains responsible for understanding the implementation, validating behavior, and making final engineering decisions.
 
-Deploy the two applications as separate Vercel projects:
+### Accepted suggestion
 
-1. Create a Vercel project with root directory `frontend`. Set `NEXT_PUBLIC_API_URL` to the deployed backend URL ending in `/api`.
-2. Create a second Vercel project with root directory `backend`. The included `backend/vercel.json` exposes the Express app as a serverless function.
-3. Use a hosted PostgreSQL database such as Neon, Supabase, or Railway. Set `DATABASE_URL`, `JWT_SECRET`, `JWT_EXPIRES_IN`, `NODE_ENV=production`, and `CORS_ORIGIN` in the backend project.
-4. Run `npx prisma migrate deploy` from the backend directory against the hosted database before using the API. Do not use the Docker Compose `postgres` hostname in production.
+Use a Prisma `Serializable` transaction for ride matching and capacity enforcement. This was accepted because concurrent passengers must not claim more seats than the Tesla capacity allows, and PostgreSQL can reject conflicting transactions safely.
 
-## Bonus: If Oi Tesla Goes Viral (Scaling to 1M Passengers)
+### Rejected/Modified suggestion
 
-If this scales to 1M passengers and 100k drivers, the current `Serializable` transaction bottleneck will fail under load.
-
-**Scaling Strategy**:
-1. **Load Balancing & Horizontal Scaling**: Put the Express API behind an API Gateway (AWS API Gateway or NGINX) and scale it horizontally using container orchestration (ECS/EKS).
-2. **Database Strategy**: 
-   - Move from single Postgres instance to Primary-Replica architecture (read replicas for history/status).
-   - Use PostGIS for actual geospatial indexing instead of string matching zones.
-3. **Concurrency & Matching (Redis + Queues)**:
-   - Instead of locking in Postgres, use Redis to track real-time available seats in specific pools.
-   - Ride requests go into a Kafka/RabbitMQ queue. Dedicated "Matcher" worker services consume the queue, match riders asynchronously, and claim seats in Redis atomically (using Lua scripts).
-   - Once matched, the worker persists the final state to Postgres. This offloads the high-contention matching logic from the main relational DB.
-4. **Real-time**: Replace polling with WebSockets (Socket.io) or Server-Sent Events (SSE) for driver locations and ride status updates.
-
-### UI Redesign 2.0
-*Screenshots of the new Premium Dark Mode UI have been updated in the release docs.*
+Use WebSockets for ride status updates in the MVP. This was modified to use REST polling instead, keeping the deployment and operational model simpler while the product has low traffic and no live vehicle-location requirement.
