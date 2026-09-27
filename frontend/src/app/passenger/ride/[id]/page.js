@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { apiFetch, moneyPoysha } from "../../../../lib/api";
@@ -15,7 +15,7 @@ export default function RidePage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
-  async function load() {
+  const load = useCallback(async () => {
     try {
       setRide(await apiFetch(`/rides/${id}`));
     } catch (e) {
@@ -23,13 +23,13 @@ export default function RidePage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [id]);
 
   useEffect(() => {
     load();
     const t = setInterval(load, 5000);
     return () => clearInterval(t);
-  }, [id]);
+  }, [load]);
 
   async function cancel() {
     try {

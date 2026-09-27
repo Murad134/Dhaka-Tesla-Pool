@@ -1,4 +1,4 @@
-const { isValidTransition } = require("../src/utils/rideStateMachine");
+const { isValidTransition } = require("../utils/rideStateMachine");
 
 describe("ride state machine", () => {
   test("allows requested to matched", () => {

@@ -142,6 +142,15 @@ Password for all users: `Password123!`
 - **Demo Video**: [Link to Loom Video](#) *(Placeholder)*
 - **Deployment URL**: [Link to Vercel/Render](#) *(Placeholder)*
 
+### Vercel Deployment
+
+Deploy the two applications as separate Vercel projects:
+
+1. Create a Vercel project with root directory `frontend`. Set `NEXT_PUBLIC_API_URL` to the deployed backend URL ending in `/api`.
+2. Create a second Vercel project with root directory `backend`. The included `backend/vercel.json` exposes the Express app as a serverless function.
+3. Use a hosted PostgreSQL database such as Neon, Supabase, or Railway. Set `DATABASE_URL`, `JWT_SECRET`, `JWT_EXPIRES_IN`, `NODE_ENV=production`, and `CORS_ORIGIN` in the backend project.
+4. Run `npx prisma migrate deploy` from the backend directory against the hosted database before using the API. Do not use the Docker Compose `postgres` hostname in production.
+
 ## Bonus: If Oi Tesla Goes Viral (Scaling to 1M Passengers)
 
 If this scales to 1M passengers and 100k drivers, the current `Serializable` transaction bottleneck will fail under load.

@@ -1,4 +1,4 @@
-const { calculateFare } = require("../src/utils/fareCalculator");
+const { calculateFare } = require("../utils/fareCalculator");
 
 describe("fare calculator", () => {
   test("calculates a non-pooled fare", () => {

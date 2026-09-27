@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import Image from "next/image";
 import { useAuth } from "../context/AuthContext";
 
 export default function Home() {
@@ -31,9 +32,11 @@ export default function Home() {
             </div>
           </div>
           <div style={{ display: 'flex', justifyContent: 'center' }}>
-            <img 
+            <Image
               src="/images/ride_sharing_car.jpg" 
               alt="Ride Sharing Tesla" 
+              width={600}
+              height={400}
               style={{ 
                 width: '100%', 
                 maxWidth: '600px', 

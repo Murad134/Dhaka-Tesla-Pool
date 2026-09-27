@@ -1,4 +1,4 @@
-const { isCompatibleRoute } = require("../src/utils/zones");
+const { isCompatibleRoute } = require("../utils/zones");
 
 describe("corridor matching", () => {
   test("accepts same pickup zone", () => {
