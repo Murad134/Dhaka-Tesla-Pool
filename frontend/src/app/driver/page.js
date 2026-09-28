@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { apiFetch, moneyPoysha } from "../../lib/api";
 import RideStatusBadge from "../../components/RideStatusBadge";
+import { showError, showSuccess } from "../../lib/feedback";
 
 export default function DriverPage() {
   const [me, setMe] = useState(null);
@@ -44,8 +45,10 @@ export default function DriverPage() {
         body: JSON.stringify({ isOnline: !me.driver.isOnline })
       });
       await load();
+      await showSuccess("Driver status updated", "Your availability is now updated.");
     } catch (e) {
       setError(e.message);
+      showError(e);
     } finally {
       setBusy(false);
     }
@@ -55,8 +58,10 @@ export default function DriverPage() {
     try {
       await apiFetch(`/rides/${id}/match`, { method: "POST" });
       await load();
+      await showSuccess("Ride matched", "The passenger has been added to the active pool.");
     } catch (e) {
       setError(e.message);
+      showError(e);
     }
   }
 
@@ -67,8 +72,10 @@ export default function DriverPage() {
         body: JSON.stringify({ status })
       });
       await load();
+      await showSuccess("Ride updated", `Ride status is now ${status.replaceAll("_", " ").toLowerCase()}.`);
     } catch (e) {
       setError(e.message);
+      showError(e);
     }
   }
 

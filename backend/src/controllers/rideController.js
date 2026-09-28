@@ -4,6 +4,23 @@ const prisma = require("../config/db");
 const { calculateFare } = require("../utils/fareCalculator");
 const { recalculatePooledFare } = require("../utils/poolMatcher");
 const { assertValidTransition, statusTimestampField } = require("../utils/rideStateMachine");
+const { isCompatibleRoute } = require("../utils/zones");
+
+async function runSerializable(work) {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await prisma.$transaction(work, { isolationLevel: "Serializable" });
+    } catch (error) {
+      if (error.code !== "P2034" || attempt === 3) {
+        if (error.code === "P2034") {
+          error.statusCode = 409;
+          error.message = "Ride changed by a concurrent request; retry";
+        }
+        throw error;
+      }
+    }
+  }
+}
 
 const createSchema = z.object({
   pickupZone: z.string().min(1),
@@ -34,7 +51,7 @@ async function createRide(req, res, next) {
 
     const fare = calculateFare({ distanceKm: input.distanceKm, isPooled: false });
 
-    const ride = await prisma.$transaction(async (tx) => {
+    const ride = await runSerializable(async (tx) => {
       const activeRide = await tx.ride.findFirst({
         where: {
           passengerId: req.user.id,
@@ -125,39 +142,44 @@ async function matchRide(req, res, next) {
       return res.status(409).json({ error: "Driver must be online and have a Tesla" });
     }
 
-    const existingPool = await prisma.pool.findFirst({
-      where: {
-        teslaId: driver.tesla.id,
-        status: { in: [RideStatus.MATCHED, RideStatus.DRIVER_ARRIVED, RideStatus.STARTED] }
-      },
-      include: {
-        tesla: true,
-        rides: {
-          where: { status: { not: RideStatus.CANCELLED } },
-          include: { pickupZone: true, destinationZone: true }
-        }
-      },
-      orderBy: { createdAt: "asc" }
-    });
+    const result = await runSerializable(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "Tesla" WHERE "id" = ${driver.tesla.id} FOR UPDATE`;
 
-    const compatibleExistingPool = existingPool &&
-      existingPool.rides.some((member) => require("../utils/zones").isCompatibleRoute(
-        ride.pickupZone.name,
-        ride.destinationZone.name,
-        member.pickupZone.name,
-        member.destinationZone.name
-      )) &&
-      existingPool.rides.reduce((sum, member) => sum + member.seatsRequested, 0) + ride.seatsRequested <= driver.tesla.capacity
-      ? existingPool
-      : null;
-
-    const result = await prisma.$transaction(async (tx) => {
-      const current = await tx.ride.findUnique({ where: { id: ride.id } });
+      const current = await tx.ride.findUnique({
+        where: { id: ride.id },
+        include: { pickupZone: true, destinationZone: true }
+      });
       if (!current || current.status !== RideStatus.REQUESTED) {
         const e = new Error("Ride was already matched or cancelled");
         e.statusCode = 409;
         throw e;
       }
+
+      const pools = await tx.pool.findMany({
+        where: {
+          teslaId: driver.tesla.id,
+          status: { in: [RideStatus.MATCHED, RideStatus.DRIVER_ARRIVED, RideStatus.STARTED] }
+        },
+        include: {
+          tesla: true,
+          rides: {
+            where: { status: { not: RideStatus.CANCELLED } },
+            include: { pickupZone: true, destinationZone: true }
+          }
+        },
+        orderBy: { createdAt: "asc" }
+      });
+
+      const compatibleExistingPool = pools.find((candidate) => {
+        const occupied = candidate.rides.reduce((sum, member) => sum + member.seatsRequested, 0);
+        return occupied + current.seatsRequested <= candidate.tesla.capacity &&
+          candidate.rides.some((member) => isCompatibleRoute(
+            current.pickupZone.name,
+            current.destinationZone.name,
+            member.pickupZone.name,
+            member.destinationZone.name
+          ));
+      });
 
       let poolId = compatibleExistingPool?.id ?? null;
       let teslaId = driver.tesla.id;
@@ -216,7 +238,7 @@ async function matchRide(req, res, next) {
         },
         include: rideInclude()
       });
-    }, { isolationLevel: "Serializable" });
+    });
 
     res.json(result);
   } catch (error) {
@@ -240,7 +262,11 @@ async function transition(req, res, next) {
 
     assertValidTransition(ride.status, toStatus);
 
-    const updated = await prisma.$transaction(async (tx) => {
+    const updated = await runSerializable(async (tx) => {
+      if (ride.teslaId) {
+        await tx.$queryRaw`SELECT "id" FROM "Tesla" WHERE "id" = ${ride.teslaId} FOR UPDATE`;
+      }
+
       const current = await tx.ride.findUnique({ where: { id: ride.id } });
       if (!current) {
         const e = new Error("Ride not found");
@@ -254,7 +280,7 @@ async function transition(req, res, next) {
       }
 
       const timestampField = statusTimestampField(toStatus);
-      return tx.ride.update({
+      const updatedRide = await tx.ride.update({
         where: { id: ride.id },
         data: {
           status: toStatus,
@@ -270,7 +296,25 @@ async function transition(req, res, next) {
         },
         include: rideInclude()
       });
-    }, { isolationLevel: "Serializable" });
+
+      if ([RideStatus.COMPLETED, RideStatus.CANCELLED].includes(toStatus) && current.poolId) {
+        const remainingActive = await tx.ride.count({
+          where: {
+            poolId: current.poolId,
+            status: { in: [RideStatus.REQUESTED, RideStatus.MATCHED, RideStatus.DRIVER_ARRIVED, RideStatus.STARTED] }
+          }
+        });
+
+        if (remainingActive === 0) {
+          await tx.pool.update({
+            where: { id: current.poolId },
+            data: { status: toStatus }
+          });
+        }
+      }
+
+      return updatedRide;
+    });
 
     res.json(updated);
   } catch (error) {

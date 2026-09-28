@@ -6,6 +6,7 @@ import { apiFetch, moneyPoysha } from "../../../../lib/api";
 import RideStatusBadge from "../../../../components/RideStatusBadge";
 import FareDisplay from "../../../../components/FareDisplay";
 import PoolStatusCard from "../../../../components/PoolStatusCard";
+import { showError, showSuccess } from "../../../../lib/feedback";
 
 const STATUS_ORDER = ["REQUESTED", "MATCHED", "DRIVER_ARRIVED", "STARTED", "COMPLETED"];
 
@@ -37,8 +38,10 @@ export default function RidePage() {
         method: "PATCH",
         body: JSON.stringify({ status: "CANCELLED" })
       }));
+      await showSuccess("Ride cancelled", "The seat has been released.");
     } catch (e) {
       setError(e.message);
+      showError(e);
     }
   }
 

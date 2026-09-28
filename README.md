@@ -45,88 +45,206 @@ Two rides can be pooled when they have the same pickup zone and compatible desti
 
 ```mermaid
 flowchart LR
-    Browser[Next.js Browser] -->|REST + JWT| API[Express API]
-    API --> Prisma[Prisma ORM]
+    User[Passenger or Driver] --> Web[Next.js Web App]
+    Web -->|REST requests + JWT| API[Express REST API]
+
+    subgraph Backend[Backend domain services]
+        Routes[Routes and middleware]
+        Controllers[Controllers]
+        Match[Pool matcher]
+        Fare[Fare calculator]
+        State[Ride state machine]
+    end
+
+    API --> Routes --> Controllers
+    Controllers --> Match
+    Controllers --> Fare
+    Controllers --> State
+    Controllers --> Prisma[Prisma ORM]
+    Match --> Prisma
+    Fare --> Prisma
+    State --> Prisma
     Prisma --> DB[(PostgreSQL)]
-    API --> Match[Pool Matcher]
-    API --> Fare[Fare Calculator]
-    API --> State[Ride State Machine]
 ```
+
+Preview-safe architecture map:
+
+```text
+Passenger / Driver
+        |
+        | REST requests + JWT
+        v
+Next.js Web App
+        |
+        v
+Express REST API
+        |
+        +--> Auth / ownership middleware
+        |
+        +--> Controllers
+                |
+                +--> Pool matcher
+                +--> Fare calculator
+                +--> Ride state machine
+                +--> Prisma ORM
+                        |
+                        v
+                  PostgreSQL database
+```
+
+### Request and Matching Flow
+
+1. The frontend sends an authenticated ride request or driver action to the Express API.
+2. Authentication, ownership, and request checks run in middleware before the controller changes data.
+3. The controller uses the fare calculator, route-corridor matcher, and ride state machine according to the operation.
+4. Pool acceptance runs inside a Prisma `Serializable` transaction. It verifies route compatibility, locks the Tesla capacity decision, counts active pool seats, and then creates the pool membership and assignment together.
+5. PostgreSQL remains the source of truth for ride status, pool membership, seat usage, payment state, and the ride-history audit trail.
+
+### Ride Lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> REQUESTED
+    REQUESTED --> MATCHED: driver accepts / pool match
+    MATCHED --> DRIVER_ARRIVED: driver arrives
+    DRIVER_ARRIVED --> STARTED: ride starts
+    STARTED --> COMPLETED: ride ends
+    REQUESTED --> CANCELLED: cancel
+    MATCHED --> CANCELLED: cancel
+    DRIVER_ARRIVED --> CANCELLED: cancel before start
+```
+
+Only valid transitions are accepted by the state machine. Each transition records the previous status, new status, actor, optional note, and timestamp in `RideHistory`.
 
 ## Database Design / ERD
 
-The full ERD is also maintained in [docs/erd.md](docs/erd.md). The diagram below is derived from the Prisma schema in `backend/prisma/schema.prisma`.
+PostgreSQL is the source of truth for identity, rides, vehicle capacity, pooling, payment state, and audit history. Prisma manages the schema, migrations, and transactional writes. The full ERD is also maintained in [docs/erd.md](docs/erd.md); the diagram below is aligned with `backend/prisma/schema.prisma`.
 
 ```mermaid
 erDiagram
-    USER ||--o| DRIVER : has
+    USER ||--o| DRIVER : has_optional_profile
     USER ||--o{ RIDE : requests
-    USER ||--o{ RIDE_HISTORY : acts_on
+    USER o|--o{ RIDE_HISTORY : acts_on_optionally
     DRIVER ||--o| TESLA : drives
-    DRIVER ||--o{ RIDE : accepts
-    TESLA ||--o{ RIDE : fulfills
+    DRIVER o|--o{ RIDE : accepts_optionally
+    TESLA o|--o{ RIDE : fulfills_optionally
     TESLA ||--o{ POOL : hosts
-    ZONE ||--o{ RIDE : pickup_zone
-    ZONE ||--o{ RIDE : destination_zone
-    POOL ||--o{ RIDE : groups
+    ZONE ||--o{ RIDE : pickup
+    ZONE ||--o{ RIDE : destination
+    POOL o|--o{ RIDE : groups_optionally
     POOL ||--o{ POOL_MEMBERSHIP : contains
-    RIDE ||--o| POOL_MEMBERSHIP : has
+    RIDE ||--o| POOL_MEMBERSHIP : has_one
     RIDE ||--o{ RIDE_HISTORY : records
 
     USER {
-      string id PK
+      uuid id PK
+      string name
       string email UK
+      string passwordHash
       Role role
+      datetime createdAt
+      datetime updatedAt
     }
     DRIVER {
-      string id PK
-      string userId FK UK
+      uuid id PK
+      string userId FK, UK
       boolean isOnline
+      datetime createdAt
+      datetime updatedAt
     }
     TESLA {
-      string id PK
-      string driverId FK UK
+      uuid id PK
+      string name
+      string driverId FK, UK
       int capacity
+      datetime createdAt
+      datetime updatedAt
     }
     ZONE {
-      string id PK
+      uuid id PK
       string name UK
       decimal latitude
       decimal longitude
+      datetime createdAt
     }
     POOL {
-      string id PK
+      uuid id PK
       string teslaId FK
       RideStatus status
+      datetime createdAt
+      datetime updatedAt
     }
     RIDE {
-      string id PK
+      uuid id PK
       string passengerId FK
-      string driverId FK
-      string teslaId FK
-      string poolId FK
+      string driverId FK "nullable"
+      string teslaId FK "nullable"
+      string poolId FK "nullable"
       string pickupZoneId FK
       string destinationZoneId FK
       int seatsRequested
+      decimal distanceKm
       int farePoysha
+      int poolDiscountPoysha
+      PaymentMethod paymentMethod
+      PaymentStatus paymentStatus
       RideStatus status
+      datetime requestedAt
+      datetime matchedAt "nullable"
+      datetime driverArrivedAt "nullable"
+      datetime startedAt "nullable"
+      datetime completedAt "nullable"
+      datetime cancelledAt "nullable"
     }
     POOL_MEMBERSHIP {
-      string id PK
+      uuid id PK
       string poolId FK
-      string rideId FK UK
+      string rideId FK, UK
       int seats
+      datetime joinedAt
     }
     RIDE_HISTORY {
-      string id PK
+      uuid id PK
       string rideId FK
-      string actorId FK
-      RideStatus fromStatus
+      string actorId FK "nullable"
+      RideStatus fromStatus "nullable"
       RideStatus toStatus
+      string note "nullable"
+      datetime createdAt
     }
 ```
 
-`User` stores identity and role information. A driver has one linked `Driver` record and one linked `Tesla`. A `Ride` belongs to a passenger, may be assigned to a driver and Tesla, and may join a `Pool` through one `PoolMembership` record. `Zone` is referenced twice by each ride for pickup and destination. `RideHistory` stores status transitions and the user who performed them. Capacity is represented by Tesla capacity and membership seat counts, while fare values are stored as integer poysha.
+Preview-safe relationship map:
+
+```text
+USER (1) ------------------ (0..1) DRIVER
+  |                              |
+  | requests                     | drives
+  |                              v
+  |                         (0..1) TESLA
+  |                              |
+  |                              +---- (0..many) POOL
+  |
+  +---- (0..many) RIDE <---------- optional DRIVER
+             |
+             +-------------------- optional TESLA
+             +-------------------- optional POOL
+             +---- (1) pickup ZONE
+             +---- (1) destination ZONE
+             +---- (0..1) POOL_MEMBERSHIP ---- (1) POOL
+             +---- (0..many) RIDE_HISTORY ---- optional USER(actor)
+```
+
+### Relational Rules and Data Integrity
+
+- **Identity and roles:** `User` stores authentication and role data. A driver has one optional `Driver` profile, and each driver can have at most one Tesla through unique foreign keys.
+- **Ride ownership:** Every ride belongs to one passenger. Driver, Tesla, and Pool assignments remain nullable until matching succeeds.
+- **Route modeling:** `Ride` references `Zone` twice, once for pickup and once for destination. Route compatibility is enforced by the predefined corridor rules, not by live map routing.
+- **Pooling:** A Pool belongs to one Tesla. A ride can have at most one `PoolMembership`, and its unique `rideId` prevents duplicate membership. The stored `seats` value records the capacity consumed by that ride.
+- **Capacity and concurrency:** Matching checks active membership seats against Tesla capacity inside a serializable transaction, preventing concurrent accepts from overbooking a vehicle.
+- **Money and payment:** `farePoysha` and `poolDiscountPoysha` are integers, avoiding floating-point currency errors. `PaymentMethod` and `PaymentStatus` model how the fare is paid and its current state.
+- **Auditability:** `RideHistory` is append-only application history. `actorId` is nullable so a transition can remain auditable even if the acting user is later removed; deleting a ride cascades to its history.
+- **Deletion behavior:** Passenger, driver, Tesla, and zone references protect ride records with restricted deletes. Pool removal sets a ride's `poolId` to null, while pool memberships are removed with their parent pool or ride.
 
 ### Applications
 
@@ -190,11 +308,19 @@ These choices keep the MVP relational, easy to run locally, and simple to deploy
 
 ## Git Workflow
 
-The project Git workflow uses feature-based development and the following promotion path:
+The project follows a feature-based Git workflow with the following promotion path:
 
 ```text
 feature/* -> master -> pre-release -> release/v1.0.0
 ```
+
+The repository maintains these long-lived branches:
+
+- `master` — main integration branch
+- `pre-release` — cut from master for integration fixes, docs, and deployment checks
+- `release/v1.0.0` — cut from pre-release as the tagged MVP version
+- `feature/passenger-auth` — passenger registration, login, and JWT authentication
+- `feature/tesla-pooling` — reserved for pooling and capacity-enforcement work
 
 The commit history shows incremental work across database design, authentication, rides, pooling, drivers, tests, UI, Docker, environment configuration, and deployment.
 

@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "../../../context/AuthContext";
+import { showError, showSuccess } from "../../../lib/feedback";
 
 export default function RegisterPage() {
   const [form, setForm] = useState({ name: "", email: "", password: "", role: "PASSENGER" });
@@ -20,9 +21,11 @@ export default function RegisterPage() {
     setBusy(true);
     try {
       const u = await register(form);
+      await showSuccess("Account created", `Welcome to Dhaka Tesla Pool, ${u.name}.`);
       router.push(u.role === "DRIVER" ? "/driver" : "/passenger");
     } catch (err) {
       setError(err.message);
+      showError(err);
     } finally {
       setBusy(false);
     }

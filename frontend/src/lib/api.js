@@ -1,5 +1,14 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
+export class ApiError extends Error {
+  constructor(message, status, details) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.details = details;
+  }
+}
+
 export async function apiFetch(path, options = {}) {
   if (!API_URL) throw new Error("NEXT_PUBLIC_API_URL is not configured");
   const token = typeof window !== "undefined" ? localStorage.getItem("tesla_token") : null;
@@ -11,7 +20,13 @@ export async function apiFetch(path, options = {}) {
   const text = await response.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = { error: text || "Unexpected response" }; }
-  if (!response.ok) throw new Error(data?.error || `Request failed (${response.status})`);
+  if (!response.ok) {
+    throw new ApiError(
+      data?.error || `Request failed (${response.status})`,
+      response.status,
+      data?.details
+    );
+  }
   return data;
 }
 

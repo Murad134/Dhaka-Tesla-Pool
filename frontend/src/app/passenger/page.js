@@ -2,9 +2,10 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { apiFetch } from "../../lib/api";
+import { apiFetch, moneyPoysha } from "../../lib/api";
 import FareDisplay from "../../components/FareDisplay";
 import RideStatusBadge from "../../components/RideStatusBadge";
+import { showError, showSuccess } from "../../lib/feedback";
 
 const zones = ["Banani", "Gulshan 1", "Mohakhali", "Dhanmondi", "Mirpur", "Uttara", "Farmgate", "Bashundhara"];
 const demoDistances = {
@@ -12,6 +13,24 @@ const demoDistances = {
   "Banani-Mirpur": 9.2, "Banani-Uttara": 12, "Banani-Farmgate": 5.4,
   "Banani-Bashundhara": 6.8
 };
+const zoneCoordinates = {
+  Banani: [23.7937, 90.4066], "Gulshan 1": [23.7806, 90.4147], Mohakhali: [23.7772, 90.3994],
+  Dhanmondi: [23.7461, 90.3742], Mirpur: [23.8223, 90.3654], Uttara: [23.8759, 90.3795],
+  Farmgate: [23.7577, 90.3897], Bashundhara: [23.8223, 90.425]
+};
+
+function estimateDistance(pickup, destination) {
+  const knownDistance = demoDistances[`${pickup}-${destination}`];
+  if (knownDistance) return knownDistance;
+
+  const [lat1, lon1] = zoneCoordinates[pickup];
+  const [lat2, lon2] = zoneCoordinates[destination];
+  const radians = Math.PI / 180;
+  const dLat = (lat2 - lat1) * radians;
+  const dLon = (lon2 - lon1) * radians;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * radians) * Math.cos(lat2 * radians) * Math.sin(dLon / 2) ** 2;
+  return Math.max(0.1, Number((6371 * 2 * Math.asin(Math.sqrt(a)) * 1.25).toFixed(1)));
+}
 
 export default function PassengerPage() {
   const [form, setForm] = useState({ pickupZone: "Banani", destinationZone: "Mohakhali", seats: 1, distanceKm: 3.5, paymentMethod: "CASH" });
@@ -21,9 +40,11 @@ export default function PassengerPage() {
   const router = useRouter();
 
   useEffect(() => {
-    const key = `${form.pickupZone}-${form.destinationZone}`;
-    if (demoDistances[key]) setForm((f) => ({ ...f, distanceKm: demoDistances[key] }));
+    const distanceKm = estimateDistance(form.pickupZone, form.destinationZone);
+    setForm((f) => ({ ...f, distanceKm }));
   }, [form.pickupZone, form.destinationZone]);
+
+  const estimatedFarePoysha = Math.round(5000 + Number(form.distanceKm || 0) * 3000);
 
   async function submit(e) {
     e.preventDefault();
@@ -35,8 +56,10 @@ export default function PassengerPage() {
         body: JSON.stringify({ ...form, seats: Number(form.seats), distanceKm: Number(form.distanceKm) })
       });
       setRide(r);
+      await showSuccess("Ride requested", "Your ride is waiting for a compatible Tesla match.");
     } catch (err) {
       setError(err.message);
+      showError(err);
     } finally {
       setBusy(false);
     }
@@ -49,8 +72,10 @@ export default function PassengerPage() {
         body: JSON.stringify({ status: "CANCELLED" })
       });
       setRide(r);
+      await showSuccess("Ride cancelled", "The seat has been released.");
     } catch (err) {
       setError(err.message);
+      showError(err);
     }
   }
 
@@ -136,6 +161,11 @@ export default function PassengerPage() {
                   <option value="CASH">Cash</option>
                   <option value="TESLAPAY">TeslaPay</option>
                 </select>
+              </div>
+
+              <div className="receipt-row" style={{ marginBottom: '16px' }}>
+                <span>Estimated Fare</span>
+                <strong>{moneyPoysha(estimatedFarePoysha)}</strong>
               </div>
 
               <button className="btn btn-primary" style={{ width: '100%' }} disabled={busy}>

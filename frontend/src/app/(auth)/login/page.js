@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "../../../context/AuthContext";
+import { showError, showSuccess } from "../../../lib/feedback";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("nusrat@example.com");
@@ -17,9 +18,11 @@ export default function LoginPage() {
     setBusy(true);
     try {
       const u = await login(email, password);
+      await showSuccess("Signed in", `Welcome back, ${u.name}.`);
       router.push(u.role === "DRIVER" ? "/driver" : "/passenger");
     } catch (err) {
       setError(err.message);
+      showError(err);
     } finally {
       setBusy(false);
     }

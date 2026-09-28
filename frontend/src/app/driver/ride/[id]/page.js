@@ -5,6 +5,7 @@ import Link from "next/link";
 import { apiFetch, moneyPoysha } from "../../../../lib/api";
 import RideStatusBadge from "../../../../components/RideStatusBadge";
 import PoolStatusCard from "../../../../components/PoolStatusCard";
+import { showError, showSuccess } from "../../../../lib/feedback";
 
 export default function DriverRide() {
   const { id } = useParams();
@@ -35,8 +36,10 @@ export default function DriverRide() {
         method: "PATCH",
         body: JSON.stringify({ status })
       }));
+      await showSuccess("Ride updated", `Ride status is now ${status.replaceAll("_", " ").toLowerCase()}.`);
     } catch (e) {
       setError(e.message);
+      showError(e);
     }
   }
 
