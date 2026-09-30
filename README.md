@@ -2,6 +2,27 @@
 
 Dhaka Tesla Pool is a full-stack ride-pooling MVP for sharing fixed-capacity Tesla rides between compatible Dhaka zones. It supports passenger ride requests, driver matching, pool capacity protection, fare calculation, JWT authentication, and ride lifecycle tracking.
 
+# Project Story
+It's 8:41 AM in Dhaka. Jashim is driving his Tesla, Bullet, from Banani. Nusrat requests a ride from Banani → Mohakhali, and moments later Rafiq requests Banani → Gulshan 1.
+
+Their destinations are different, but their routes are compatible, so the system can place them in the same pool while calculating an individual, discounted fare for each passenger.
+
+Then Shirin tries to join. Bullet has a fixed capacity of three seats, so the system must guarantee that occupied seats never exceed capacity, even when multiple passengers attempt to claim the last available seat concurrently.
+
+That makes this more than a simple ride-booking CRUD application. It handles authentication, ownership, route matching, pooling, fare calculation, capacity protection, concurrency, and an auditable ride lifecycle.
+
+# Core Business Problems
+The system is designed to solve the following problems:
+
+- Ride ownership: Passengers can create and manage only their own rides.
+- Route compatibility: Rides are matched only when their predefined routes satisfy the project's corridor-matching rules.
+- Shared pooling: Multiple compatible passenger rides can share the same Tesla.
+- Individual fares: Each passenger receives a separately calculated fare based on their route, with a pool discount when applicable.
+- Capacity protection: Occupied seats can never exceed the Tesla's fixed capacity.
+- Concurrency: Simultaneous attempts to claim the last available seat are handled safely using transactional database operations.
+- Ride lifecycle: Only valid ride-status transitions are accepted.
+- Auditability: Every ride-status transition is recorded in RideHistory.
+
 ## Live Deployment
 
 - Frontend: https://frontend-dhaka-tesla-pool.vercel.app
@@ -235,6 +256,17 @@ USER (1) ------------------ (0..1) DRIVER
              +---- (0..many) RIDE_HISTORY ---- optional USER(actor)
 ```
 
+### Fare Model
+The fare for each passenger is calculated using a simple and transparent formula:
+
+ `Passenger Fare = Base Fare + Distance Charge − Pool Discount`
+
+Where:
+
+- Base Fare: Fixed starting fare for every ride.
+- Distance Charge: Calculated based on the estimated trip distance.
+- Pool Discount: Discount applied when the passenger is part of a shared pool.
+
 ### Relational Rules and Data Integrity
 
 - **Identity and roles:** `User` stores authentication and role data. A driver has one optional `Driver` profile, and each driver can have at most one Tesla through unique foreign keys.
@@ -245,6 +277,83 @@ USER (1) ------------------ (0..1) DRIVER
 - **Money and payment:** `farePoysha` and `poolDiscountPoysha` are integers, avoiding floating-point currency errors. `PaymentMethod` and `PaymentStatus` model how the fare is paid and its current state.
 - **Auditability:** `RideHistory` is append-only application history. `actorId` is nullable so a transition can remain auditable even if the acting user is later removed; deleting a ride cascades to its history.
 - **Deletion behavior:** Passenger, driver, Tesla, and zone references protect ride records with restricted deletes. Pool removal sets a ride's `poolId` to null, while pool memberships are removed with their parent pool or ride.
+
+## Screenshots
+### Home page
+<img src="https://i.ibb.co.com/HT4xDZVD/Dashboard.png" alt="Home Page" />
+
+The main passenger dashboard for requesting rides, viewing active rides, and accessing ride history.
+### Login
+<img src="https://i.ibb.co.com/pBkv1nsm/Login.png" alt="Login Page" />
+
+Secure login screen for passenger and driver authentication.
+### Nusrat — Ride Request
+<img src="https://i.ibb.co.com/d4TTbsh3/Nusrat-Request-Pool.png" alt="Nusrat Ride Request" />
+
+Nusrat requests a ride from Banani to Mohakhali with an estimated fare.
+### Nusrat — After Request
+<img src="https://i.ibb.co.com/P2LDPmF/N-after-Request.png" alt="Nusrat After Request" />
+
+Displays Nusrat's created ride with its current status and ride details.
+### Nusrat — Ride Tracking
+<img src="https://i.ibb.co.com/hJ9k1WKV/N-ride-tracking.png" alt="Nusrat Ride Tracking" />
+
+Nusrat can track the current ride status throughout the trip lifecycle.
+
+### Nusrat — Ride History
+<img src="https://i.ibb.co.com/QF1YFVjN/N-ride-history.png" alt="Nusrat Ride History" />
+
+Displays Nusrat's completed and previous rides in the ride history.
+
+### Rafiq — Ride Request
+<img src="https://i.ibb.co.com/hxK4TkMm/Rafiq-Request-pool.png" alt="Rafiq Ride Request" />
+
+Rafiq requests a compatible ride from Banani to Gulshan 1.
+
+### Rafiq — After Request
+<img src="https://i.ibb.co.com/6753385F/Rafiq-after-request.png" alt="Rafiq After Request" />
+
+Displays Rafiq's ride request with its calculated fare and current status.
+
+### Shirin — After Request
+<img src="https://i.ibb.co.com/ptKcJSC/Shirin-after-request.png" alt="Shirin After Request" />
+
+Shirin's request demonstrates the shared-Tesla flow and fixed passenger capacity.
+
+### Active Ride Validation
+<img src="https://i.ibb.co.com/gL8tqJ04/N-request-another-when-he-Active-Ride.png" alt="Active Ride Validation" />
+
+Prevents a passenger from creating another ride while an active ride is already in progress.
+
+### Jashim — Driver Dashboard
+<img src="https://i.ibb.co.com/PZNtnYNw/Jashim-Driver-Dashboard.png" alt="Jashim Driver Dashboard" />
+
+Driver dashboard showing Jashim's Bullet, passenger requests, and pool information.
+
+### Jashim — Accept Pool
+<img src="https://i.ibb.co.com/h19ZxHLQ/Jasim-accept-Pool.png" alt="Jashim Accept Pool" />
+
+Jashim accepts the compatible passenger pool for Bullet.
+
+### Jashim — Driver Arrived
+<img src="https://i.ibb.co.com/DDq9Fjdd/Jasim-after-Click-arrived.png" alt="Jashim Driver Arrived" />
+
+The driver marks the ride as arrived and moves it to the DRIVER_ARRIVED state.
+
+### Jashim — Start Trip
+<img src="https://i.ibb.co.com/5mHgKNX/Jasim-after-click-Start-Trip.png" alt="Jashim Start Trip" />
+
+The driver starts the pooled trip and moves the ride to the STARTED state.
+
+### Jashim — Complete Ride
+<img src="https://i.ibb.co.com/hvswSvt/Jasim-after-click-complete-ride.png" alt="Jashim Complete Ride" />
+
+The driver completes the trip and moves the ride to the COMPLETED state
+
+### Jashim — Dashboard After Completion
+<img src="https://i.ibb.co.com/PvRVpBGm/Jasim-Dashboard-after-complete-Ride.png" alt="Jashim Dashboard After Completion" />
+
+The driver dashboard reflects the completed ride and updated trip information.
 
 ### Applications
 
@@ -340,6 +449,8 @@ The following list records the provided commit subjects in chronological project
 10. `build(docker): add Docker Compose setup with migrations, seed, and health checks`
 11. `chore(env): configure Supabase PostgreSQL and JWT environment variables`
 12. `feat: update backend and frontend configurations for Vercel deployment`
+13. `chore: update dependencies and deployment configurations`
+14. `feat(ui): show success and error notifications with SweetAlert2`
 
 The Docker work added backend and frontend Dockerfiles, `.dockerignore` files, a PostgreSQL service, a persistent PostgreSQL volume, environment configuration, Prisma migrations and seed execution, and service health checks.
 
