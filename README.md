@@ -28,6 +28,7 @@ The system is designed to solve the following problems:
 - Frontend: https://frontend-dhaka-tesla-pool.vercel.app
 - Backend: https://backend-dhaka-tesla-pool.vercel.app
 - Health check: https://backend-dhaka-tesla-pool.vercel.app/health
+- Project Demo : https://drive.google.com/file/d/1AZ2NXUzxhLtmzrjfryrKEnmADixjLudv/view
 
 The frontend and backend are deployed as separate Vercel projects. PostgreSQL is hosted separately and is accessed by Prisma from the backend function.
 
