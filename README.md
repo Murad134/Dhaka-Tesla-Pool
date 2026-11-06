@@ -23,13 +23,6 @@ The system is designed to solve the following problems:
 - Ride lifecycle: Only valid ride-status transitions are accepted.
 - Auditability: Every ride-status transition is recorded in RideHistory.
 
-## Live Deployment
-
-- Frontend: https://frontend-dhaka-tesla-pool.vercel.app
-- Backend: https://backend-dhaka-tesla-pool.vercel.app
-- Health check: https://backend-dhaka-tesla-pool.vercel.app/health
-
-The frontend and backend are deployed as separate Vercel projects. PostgreSQL is hosted separately and is accessed by Prisma from the backend function.
 
 ## Zones & Matching Rule
 
